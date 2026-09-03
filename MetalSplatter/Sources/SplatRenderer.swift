@@ -702,18 +702,20 @@ public final class SplatRenderer: @unchecked Sendable {
                        viewports: [ViewportDescriptor],
                        colorTexture: MTLTexture,
                        colorStoreAction: MTLStoreAction,
+                       colorLoadAction: MTLLoadAction,
+                       depthLoadAction: MTLLoadAction,
                        depthTexture: MTLTexture?,
                        rasterizationRateMap: MTLRasterizationRateMap?,
                        renderTargetArrayLength: Int,
                        for commandBuffer: MTLCommandBuffer) -> MTLRenderCommandEncoder {
         let renderPassDescriptor = MTLRenderPassDescriptor()
         renderPassDescriptor.colorAttachments[0].texture = colorTexture
-        renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        renderPassDescriptor.colorAttachments[0].loadAction = colorLoadAction
         renderPassDescriptor.colorAttachments[0].storeAction = colorStoreAction
         renderPassDescriptor.colorAttachments[0].clearColor = clearColor
         if let depthTexture {
             renderPassDescriptor.depthAttachment.texture = depthTexture
-            renderPassDescriptor.depthAttachment.loadAction = .clear
+            renderPassDescriptor.depthAttachment.loadAction = depthLoadAction
             renderPassDescriptor.depthAttachment.storeAction = .store
             renderPassDescriptor.depthAttachment.clearDepth = 0.0
         }
@@ -756,6 +758,14 @@ public final class SplatRenderer: @unchecked Sendable {
     ///   - viewports: The viewport descriptors for rendering (supports multiple viewports for stereo on visionOS)
     ///   - colorTexture: The texture to render color output to
     ///   - colorStoreAction: The store action for the color attachment
+    ///   - colorLoadAction: The load action for the color attachment. Defaults to `.clear`, which
+    ///     is what a renderer drawing a whole frame on its own wants. Pass `.load` to draw into a
+    ///     target another pass has already written — several `SplatRenderer`s compositing into one
+    ///     drawable, each with its own view matrix, which is how a scene and per-peer avatars share
+    ///     a frame without a per-chunk transform.
+    ///   - depthLoadAction: The load action for the depth attachment. `.load` alongside a `.load`
+    ///     color keeps the earlier pass's depth, so a later splat is occluded by what is already
+    ///     in front of it rather than drawing over it.
     ///   - depthTexture: Optional depth texture for depth output
     ///   - rasterizationRateMap: Optional rasterization rate map for variable rate shading
     ///   - renderTargetArrayLength: The render target array length (for layered rendering)
@@ -767,6 +777,8 @@ public final class SplatRenderer: @unchecked Sendable {
     public func render(viewports: [ViewportDescriptor],
                        colorTexture: MTLTexture,
                        colorStoreAction: MTLStoreAction,
+                       colorLoadAction: MTLLoadAction = .clear,
+                       depthLoadAction: MTLLoadAction = .clear,
                        depthTexture: MTLTexture?,
                        rasterizationRateMap: MTLRasterizationRateMap?,
                        renderTargetArrayLength: Int,
@@ -876,6 +888,8 @@ public final class SplatRenderer: @unchecked Sendable {
                                           viewports: viewports,
                                           colorTexture: colorTexture,
                                           colorStoreAction: colorStoreAction,
+                                          colorLoadAction: colorLoadAction,
+                                          depthLoadAction: depthLoadAction,
                                           depthTexture: depthTexture,
                                           rasterizationRateMap: rasterizationRateMap,
                                           renderTargetArrayLength: renderTargetArrayLength,
