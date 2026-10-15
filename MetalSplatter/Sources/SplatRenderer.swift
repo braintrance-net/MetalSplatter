@@ -6,6 +6,36 @@ import SplatIO
 import Synchronization
 
 public final class SplatRenderer: @unchecked Sendable {
+    /// Point-cloud reveal: splats appear as points in an outward wave from `center`, then a second wave turns them into full Gaussians.
+    public struct SplatAnimation: Sendable, Equatable {
+        /// World-space point both reveal waves expand from.
+        public var center: SIMD3<Float>
+        /// World-space distance the waves cover by `progress == 1`.
+        public var radius: Float
+        /// 0...1; the first half reveals points, the second half turns them into Gaussians.
+        public var progress: Float
+        /// Width of each wavefront as a fraction of `radius`.
+        public var feather: Float
+        /// Point radius before the Gaussian wave arrives, as a fraction of 12 px (floored at 0.5 px).
+        public var pointScale: Float
+        /// Alpha multiplier for a splat while it is still a point.
+        public var pointAlpha: Float
+
+        public init(center: SIMD3<Float>,
+                    radius: Float,
+                    progress: Float,
+                    feather: Float = 0.04,
+                    pointScale: Float = 0.06,
+                    pointAlpha: Float = 0.75) {
+            self.center = center
+            self.radius = max(radius, 0.0001)
+            self.progress = min(max(progress, 0), 1)
+            self.feather = max(feather, 0.0001)
+            self.pointScale = min(max(pointScale, 0.001), 1)
+            self.pointAlpha = min(max(pointAlpha, 0), 1)
+        }
+    }
+
     enum Constants {
         // Keep in sync with Shaders.metal : maxViewCount
         static let maxViewCount = 2
@@ -70,6 +100,23 @@ public final class SplatRenderer: @unchecked Sendable {
 
         var splatCount: UInt32
         var indexedSplatCount: UInt32
+
+        var animationCenterAndRadius: SIMD4<Float> = .zero
+        var animationParams: SIMD4<Float> = .zero  // progress, feather, pointScale, pointAlpha
+        var animationMode: UInt32 = 0              // 0 = disabled, 1 = point-cloud reveal
+        var _animationPadding: SIMD3<UInt32> = .zero
+
+        mutating func setAnimation(_ animation: SplatAnimation?) {
+            guard let animation else {
+                animationCenterAndRadius = .zero
+                animationParams = .zero
+                animationMode = 0
+                return
+            }
+            animationCenterAndRadius = SIMD4(animation.center, animation.radius)
+            animationParams = SIMD4(animation.progress, animation.feather, animation.pointScale, animation.pointAlpha)
+            animationMode = 1
+        }
     }
 
     // Keep in sync with Shaders.metal : UniformsArray
@@ -117,6 +164,9 @@ public final class SplatRenderer: @unchecked Sendable {
      The color to clear the render target to before rendering splats.
      */
     public let clearColor: MTLClearColor
+
+    /// Reveal animation applied in the vertex shader each frame; nil renders splats unmodified.
+    public var splatAnimation: SplatAnimation?
 
     private var writeDepth: Bool {
         depthFormat != .invalid
@@ -624,6 +674,7 @@ public final class SplatRenderer: @unchecked Sendable {
                                 indexedSplatCount: UInt32) {
         // Compute average camera position from all viewports
         let cameraPos = viewports.map { Self.cameraWorldPosition(forViewMatrix: $0.viewMatrix) }.mean ?? .zero
+        let animation = splatAnimation
 
         for (i, viewport) in viewports.enumerated() where i <= maxViewCount {
             // Precompute values for covariance projection
@@ -634,7 +685,7 @@ public final class SplatRenderer: @unchecked Sendable {
             let tanHalfFovX = 1 / proj00
             let tanHalfFovY = 1 / proj11
 
-            let uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
+            var uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
                                     viewMatrix: viewport.viewMatrix,
                                     cameraPosition: MTLPackedFloat3Make(cameraPos.x, cameraPos.y, cameraPos.z),
                                     screenSize: SIMD2(x: UInt32(viewport.screenSize.x), y: UInt32(viewport.screenSize.y)),
@@ -645,6 +696,7 @@ public final class SplatRenderer: @unchecked Sendable {
                                     chunkCount: chunkCount,
                                     splatCount: splatCount,
                                     indexedSplatCount: indexedSplatCount)
+            uniforms.setAnimation(animation)
             renderState.uniforms.pointee.setUniforms(index: i, uniforms)
         }
     }
