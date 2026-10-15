@@ -65,6 +65,12 @@ typedef struct
      */
     uint splatCount;
     uint indexedSplatCount;
+
+    // Reveal animation. mode: 0 = disabled, 1 = point cloud first, then Gaussian reveal.
+    float4 animationCenterAndRadius;
+    float4 animationParams;        // progress, feather, pointScale, pointAlpha
+    uint animationMode;
+    uint3 _animationPadding;
 } Uniforms;
 
 typedef struct
