@@ -1,5 +1,7 @@
 #import "SplatProcessing.h"
 
+constant uint SplatAnimationModePointCloudReveal = 1;
+
 // MARK: - Color Space Conversion
 
 /// Converts sRGB color to linear color space.
@@ -145,6 +147,48 @@ void decomposeCovariance(float3 cov2D, thread float2 &v1, thread float2 &v2) {
     v2 = eigenvector2 * sqrt(lambda2);
 }
 
+// MARK: - Reveal Animation
+
+float outwardRevealMix(float normalizedDistance, float progress, float feather) {
+    if (progress <= 0.0f) {
+        return 0.0f;
+    }
+    if (progress >= 1.0f) {
+        return 1.0f;
+    }
+    return 1.0f - smoothstep(progress - feather, progress + feather, normalizedDistance);
+}
+
+float revealPhaseProgress(float progress, float phaseOffset) {
+    return clamp(progress * 2.0f - phaseOffset, 0.0f, 1.0f);
+}
+
+void pointCloudRevealMixes(float3 position,
+                           Uniforms uniforms,
+                           thread float &pointMix,
+                           thread float &gaussianMix) {
+    pointMix = 1.0f;
+    gaussianMix = 1.0f;
+
+    if (uniforms.animationMode != SplatAnimationModePointCloudReveal) {
+        return;
+    }
+
+    float radius = max(uniforms.animationCenterAndRadius.w, 0.0001f);
+    float progress = clamp(uniforms.animationParams.x, 0.0f, 1.0f);
+    if (progress >= 1.0f) {
+        return;
+    }
+
+    float feather = max(uniforms.animationParams.y, 0.0001f);
+    float normalizedDistance = distance(position, uniforms.animationCenterAndRadius.xyz) / radius;
+
+    float pointProgress = revealPhaseProgress(progress, 0.0f);
+    float gaussianProgress = revealPhaseProgress(progress, 1.0f);
+    pointMix = outwardRevealMix(normalizedDistance, pointProgress, feather);
+    gaussianMix = outwardRevealMix(normalizedDistance, gaussianProgress, feather);
+}
+
 FragmentIn splatVertex(Splat splat,
                        Uniforms uniforms,
                        uint relativeVertexIndex,
@@ -182,6 +226,17 @@ FragmentIn splatVertex(Splat splat,
     float2 axis2;
     decomposeCovariance(cov2D, axis1, axis2);
 
+    float pointMix = 1.0f;
+    float gaussianMix = 1.0f;
+    pointCloudRevealMixes(float3(splat.position), uniforms, pointMix, gaussianMix);
+    if (uniforms.animationMode == SplatAnimationModePointCloudReveal) {
+        float pointScale = clamp(uniforms.animationParams.z, 0.001f, 1.0f);
+        // Fixed screen-space radius so the first phase reads as a clean, uniform point cloud.
+        float pointRadius = max(0.5f, pointScale * 12.0f);
+        axis1 = mix(float2(pointRadius, 0.0f), axis1, gaussianMix);
+        axis2 = mix(float2(0.0f, pointRadius), axis2, gaussianMix);
+    }
+
     float4 projectedCenter = uniforms.projectionMatrix * viewPosition4;
 
     float bounds = 1.2 * projectedCenter.w;
@@ -211,7 +266,12 @@ FragmentIn splatVertex(Splat splat,
     out.relativePosition = kBoundsRadius * relativeCoordinates;
 
     // Convert from sRGB to linear to match Metal expectations for shader color output
-    out.color = half4(sRGBToLinear(srgbColor), splat.color.a);
+    half alpha = splat.color.a;
+    if (uniforms.animationMode == SplatAnimationModePointCloudReveal) {
+        float pointAlpha = clamp(uniforms.animationParams.w, 0.0f, 1.0f);
+        alpha *= half(pointMix * mix(pointAlpha, 1.0f, gaussianMix));
+    }
+    out.color = half4(sRGBToLinear(srgbColor), alpha);
     return out;
 }
 
