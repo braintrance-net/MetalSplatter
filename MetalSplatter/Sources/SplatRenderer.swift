@@ -714,7 +714,7 @@ public final class SplatRenderer: @unchecked Sendable {
         if let depthTexture {
             renderPassDescriptor.depthAttachment.texture = depthTexture
             renderPassDescriptor.depthAttachment.loadAction = .clear
-            renderPassDescriptor.depthAttachment.storeAction = .store
+            renderPassDescriptor.depthAttachment.storeAction = .dontCare	
             renderPassDescriptor.depthAttachment.clearDepth = 0.0
         }
         renderPassDescriptor.rasterizationRateMap = rasterizationRateMap
