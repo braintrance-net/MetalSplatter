@@ -105,8 +105,8 @@ public final class SplatRenderer: @unchecked Sendable {
         case linear
         case gammaEncoded
     }
-    public enum GaussianFalloff: Sendable { case standard, playCanvas }
-    public let gaussianFalloff: GaussianFalloff
+    public enum GaussianKernel: Sendable { case standard, playCanvas }
+    public let gaussianKernel: GaussianKernel
     public enum SortingMode: Sendable { case distance, viewDepth }
     public let compositingColorSpace: CompositingColorSpace
     public let colorFormat: MTLPixelFormat
@@ -266,7 +266,7 @@ public final class SplatRenderer: @unchecked Sendable {
                 colorFormat: MTLPixelFormat,
                 compositingColorSpace: CompositingColorSpace = .linear,
                 sortingMode: SortingMode = .distance,
-                gaussianFalloff: GaussianFalloff = .standard,
+                gaussianKernel: GaussianKernel = .standard,
                 depthFormat: MTLPixelFormat,
                 sampleCount: Int,
                 maxViewCount: Int,
@@ -281,7 +281,7 @@ public final class SplatRenderer: @unchecked Sendable {
 
         self.colorFormat = colorFormat
         self.compositingColorSpace = compositingColorSpace
-        self.gaussianFalloff = gaussianFalloff
+        self.gaussianKernel = gaussianKernel
         self.depthFormat = depthFormat
         self.sampleCount = sampleCount
         self.maxViewCount = min(maxViewCount, Constants.maxViewCount)
@@ -649,7 +649,7 @@ public final class SplatRenderer: @unchecked Sendable {
             let uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
                                     viewMatrix: viewport.viewMatrix,
                                     cameraPosition: MTLPackedFloat3Make(cameraPos.x, cameraPos.y, cameraPos.z),
-                                    renderingFlags: (compositingColorSpace == .gammaEncoded ? 1 : 0) | (gaussianFalloff == .playCanvas ? 2 : 0),
+                                    renderingFlags: (compositingColorSpace == .gammaEncoded ? 1 : 0) | (gaussianKernel == .playCanvas ? 2 : 0),
                                     screenSize: SIMD2(x: UInt32(viewport.screenSize.x), y: UInt32(viewport.screenSize.y)),
                                     focalX: focalX,
                                     focalY: focalY,

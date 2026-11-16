@@ -82,14 +82,16 @@ float3 calcCovariance2D(float3 viewPos,
                         float focalX,
                         float focalY,
                         float tanHalfFovX,
-                        float tanHalfFovY) {
+                        float tanHalfFovY, float lowPassVariance, bool clampProjection) {
     float invViewPosZ = 1 / viewPos.z;
     float invViewPosZSquared = invViewPosZ * invViewPosZ;
 
     float limX = 1.3f * tanHalfFovX;
     float limY = 1.3f * tanHalfFovY;
-    viewPos.x = clamp(viewPos.x * invViewPosZ, -limX, limX) * viewPos.z;
-    viewPos.y = clamp(viewPos.y * invViewPosZ, -limY, limY) * viewPos.z;
+    if (clampProjection) {
+        viewPos.x = clamp(viewPos.x * invViewPosZ, -limX, limX) * viewPos.z;
+        viewPos.y = clamp(viewPos.y * invViewPosZ, -limY, limY) * viewPos.z;
+    }
 
     float3x3 J = float3x3(
         focalX * invViewPosZ, 0, 0,
@@ -107,8 +109,8 @@ float3 calcCovariance2D(float3 viewPos,
 
     // Apply low-pass filter: every Gaussian should be at least
     // one pixel wide/high. Discard 3rd row and column.
-    cov[0][0] += 0.3;
-    cov[1][1] += 0.3;
+    cov[0][0] += lowPassVariance;
+    cov[1][1] += lowPassVariance;
     return float3(cov[0][0], cov[0][1], cov[1][1]);
 }
 
@@ -117,19 +119,21 @@ float3 calcCovariance2D(float3 viewPos,
 //              | c d |
 // (where b == c because the Gaussian covariance matrix is symmetric),
 // cov2D = ( a, b, d )
-void decomposeCovariance(float3 cov2D, thread float2 &v1, thread float2 &v2) {
+void decomposeCovariance(float3 cov2D, thread float2 &v1, thread float2 &v2, bool playCanvasKernel) {
     float a = cov2D.x;
     float b = cov2D.y;
     float d = cov2D.z;
-    float det = a * d - b * b; // matrix is symmetric, so "c" is same as "b"
+    
     float trace = a + d;
 
     float mean = 0.5 * trace;
-    float dist = max(0.1, sqrt(mean * mean - det)); // based on https://github.com/graphdeco-inria/diff-gaussian-rasterization/blob/main/cuda_rasterizer/forward.cu
+    // Stable discriminant avoids cancellation in mean*mean - determinant.
+    float dist = length(float2(0.5f * (a - d), b));
+    if (!playCanvasKernel) { dist = max(0.1f, dist); }
 
     // Eigenvalues
     float lambda1 = mean + dist;
-    float lambda2 = mean - dist;
+    float lambda2 = max(mean - dist, playCanvasKernel ? 0.025f : 0.0f);
 
     float2 eigenvector1;
     if (b == 0) {
@@ -173,14 +177,18 @@ FragmentIn splatVertex(Splat splat,
         srgbColor = evaluateSH(viewDir, splat.color.rgb, shCoefficients, shDegree, splatIndex);
     }
 
+    bool playCanvasKernel = (uniforms.renderingFlags & 2u) != 0;
+    // PlayCanvas uses twice our focal length and halves its projected axes.
+    // Its +0.3 covariance filter is therefore +0.075 in our pixel coordinates.
     float3 cov2D = calcCovariance2D(viewPosition3, splat.covA, splat.covB,
                                     uniforms.viewMatrix,
                                     uniforms.focalX, uniforms.focalY,
-                                    uniforms.tanHalfFovX, uniforms.tanHalfFovY);
+                                    uniforms.tanHalfFovX, uniforms.tanHalfFovY,
+                                    playCanvasKernel ? 0.075f : 0.3f, !playCanvasKernel);
 
     float2 axis1;
     float2 axis2;
-    decomposeCovariance(cov2D, axis1, axis2);
+    decomposeCovariance(cov2D, axis1, axis2, playCanvasKernel);
 
     float4 projectedCenter = uniforms.projectionMatrix * viewPosition4;
 
