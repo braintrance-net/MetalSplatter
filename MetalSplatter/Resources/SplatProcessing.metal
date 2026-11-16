@@ -132,7 +132,7 @@ void decomposeCovariance(float3 cov2D, thread float2 &v1, thread float2 &v2, boo
     if (!playCanvasKernel) { dist = max(0.1f, dist); }
 
     // Eigenvalues
-    float lambda1 = mean + dist;
+    float lambda1 = max(mean + dist, playCanvasKernel ? 0.025f : 0.0f);
     float lambda2 = max(mean - dist, playCanvasKernel ? 0.025f : 0.0f);
 
     float2 eigenvector1;
@@ -186,9 +186,22 @@ FragmentIn splatVertex(Splat splat,
                                     uniforms.tanHalfFovX, uniforms.tanHalfFovY,
                                     playCanvasKernel ? 0.075f : 0.3f, !playCanvasKernel);
 
+    float maximumRadius = min(1024.0f, float(min(uniforms.screenSize.x, uniforms.screenSize.y)));
+    if (playCanvasKernel) {
+        // Match the reference projector's viewport cap before converting axes
+        // to half. Near-camera/offscreen splats can otherwise overflow FP16.
+        float radius = sqrt(8.0f * max(max(cov2D.x, cov2D.z), 0.0f));
+        float capScale = max(1.0f, radius / maximumRadius);
+        cov2D /= capScale * capScale;
+    }
     float2 axis1;
     float2 axis2;
     decomposeCovariance(cov2D, axis1, axis2, playCanvasKernel);
+    if (playCanvasKernel) {
+        float limit = maximumRadius / sqrt(8.0f);
+        axis1 *= min(1.0f, limit / max(length(axis1), 1e-20f));
+        axis2 *= min(1.0f, limit / max(length(axis2), 1e-20f));
+    }
 
     float4 projectedCenter = uniforms.projectionMatrix * viewPosition4;
 
