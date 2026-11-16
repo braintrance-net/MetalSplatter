@@ -214,11 +214,20 @@ FragmentIn splatVertex(Splat splat,
     out.relativePosition = kBoundsRadius * relativeCoordinates;
 
     // Convert from sRGB to linear to match Metal expectations for shader color output
-    out.color = half4(uniforms.gammaEncodedOutput ? srgbColor : sRGBToLinear(srgbColor), splat.color.a);
+    out.color = half4((uniforms.renderingFlags & 1u) ? srgbColor : sRGBToLinear(srgbColor), splat.color.a);
+    out.playCanvasGaussian = uniforms.renderingFlags & 2u;
     return out;
 }
 
-half splatFragmentAlpha(half2 relativePosition, half splatAlpha) {
+half splatFragmentAlpha(half2 relativePosition, half splatAlpha, bool playCanvasGaussian) {
+    if (playCanvasGaussian) {
+        // PlayCanvas remaps the Gaussian to zero at sqrt(8) sigma and clips
+        // contributions below 1/255. Dense scenes amplify even small tail differences.
+        const half tail = exp(half(-4));
+        half alpha = max(half(0), (exp(-half(0.5) * dot(relativePosition, relativePosition)) - tail)
+                                  / (half(1) - tail)) * splatAlpha;
+        return alpha < half(1.0 / 255.0) ? half(0) : alpha;
+    }
     half negativeMagnitudeSquared = -dot(relativePosition, relativePosition);
     return (negativeMagnitudeSquared < -kBoundsRadiusSquared) ? 0 : exp(0.5 * negativeMagnitudeSquared) * splatAlpha;
 }

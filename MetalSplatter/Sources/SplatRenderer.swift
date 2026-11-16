@@ -53,7 +53,7 @@ public final class SplatRenderer: @unchecked Sendable {
         var projectionMatrix: matrix_float4x4
         var viewMatrix: matrix_float4x4
         var cameraPosition: MTLPackedFloat3   // World-space camera position for SH evaluation
-        var gammaEncodedOutput: UInt32 = 0
+        var renderingFlags: UInt32 = 0
         var screenSize: SIMD2<UInt32>         // Size of screen in pixels
 
         // Precomputed values for covariance projection (derived from projectionMatrix and screenSize)
@@ -105,6 +105,8 @@ public final class SplatRenderer: @unchecked Sendable {
         case linear
         case gammaEncoded
     }
+    public enum GaussianFalloff: Sendable { case standard, playCanvas }
+    public let gaussianFalloff: GaussianFalloff
     public enum SortingMode: Sendable { case distance, viewDepth }
     public let compositingColorSpace: CompositingColorSpace
     public let colorFormat: MTLPixelFormat
@@ -264,6 +266,7 @@ public final class SplatRenderer: @unchecked Sendable {
                 colorFormat: MTLPixelFormat,
                 compositingColorSpace: CompositingColorSpace = .linear,
                 sortingMode: SortingMode = .distance,
+                gaussianFalloff: GaussianFalloff = .standard,
                 depthFormat: MTLPixelFormat,
                 sampleCount: Int,
                 maxViewCount: Int,
@@ -278,6 +281,7 @@ public final class SplatRenderer: @unchecked Sendable {
 
         self.colorFormat = colorFormat
         self.compositingColorSpace = compositingColorSpace
+        self.gaussianFalloff = gaussianFalloff
         self.depthFormat = depthFormat
         self.sampleCount = sampleCount
         self.maxViewCount = min(maxViewCount, Constants.maxViewCount)
@@ -645,7 +649,7 @@ public final class SplatRenderer: @unchecked Sendable {
             let uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
                                     viewMatrix: viewport.viewMatrix,
                                     cameraPosition: MTLPackedFloat3Make(cameraPos.x, cameraPos.y, cameraPos.z),
-                                    gammaEncodedOutput: compositingColorSpace == .gammaEncoded ? 1 : 0,
+                                    renderingFlags: (compositingColorSpace == .gammaEncoded ? 1 : 0) | (gaussianFalloff == .playCanvas ? 2 : 0),
                                     screenSize: SIMD2(x: UInt32(viewport.screenSize.x), y: UInt32(viewport.screenSize.y)),
                                     focalX: focalX,
                                     focalY: focalY,

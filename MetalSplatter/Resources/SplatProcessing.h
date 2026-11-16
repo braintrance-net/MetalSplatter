@@ -36,4 +36,4 @@ FragmentIn splatVertex(Splat splat,
 
 // MARK: - Fragment Processing
 
-half splatFragmentAlpha(half2 relativePosition, half splatAlpha);
+half splatFragmentAlpha(half2 relativePosition, half splatAlpha, bool playCanvasGaussian);

@@ -47,6 +47,7 @@ vertex FragmentIn singleStageSplatVertexShader(uint vertexID [[vertex_id]],
 }
 
 fragment half4 singleStageSplatFragmentShader(FragmentIn in [[stage_in]]) {
-    half alpha = splatFragmentAlpha(in.relativePosition, in.color.a);
+    half alpha = splatFragmentAlpha(in.relativePosition, in.color.a, in.playCanvasGaussian != 0);
+    if (alpha <= 0) { discard_fragment(); }
     return half4(alpha * in.color.rgb, alpha);
 }
