@@ -105,6 +105,7 @@ public final class SplatRenderer: @unchecked Sendable {
         case linear
         case gammaEncoded
     }
+    /// PlayCanvas matches its normalized tail and pixel-space projection filter.
     public enum GaussianKernel: Sendable { case standard, playCanvas }
     public let gaussianKernel: GaussianKernel
     public enum SortingMode: Sendable { case distance, viewDepth }

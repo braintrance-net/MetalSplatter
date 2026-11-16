@@ -47,7 +47,7 @@ typedef struct
     matrix_float4x4 projectionMatrix;
     matrix_float4x4 viewMatrix;
     packed_float3 cameraPosition;  // World-space camera position for SH evaluation
-    uint renderingFlags;          // Bit 0: gamma-encoded output; bit 1: PlayCanvas falloff
+    uint renderingFlags;          // Bit 0: gamma-encoded output; bit 1: PlayCanvas Gaussian kernel
     uint2 screenSize;
 
     // Precomputed values for covariance projection (derived from projectionMatrix and screenSize)

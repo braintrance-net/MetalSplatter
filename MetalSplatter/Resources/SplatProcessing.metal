@@ -123,7 +123,7 @@ void decomposeCovariance(float3 cov2D, thread float2 &v1, thread float2 &v2, boo
     float a = cov2D.x;
     float b = cov2D.y;
     float d = cov2D.z;
-    
+
     float trace = a + d;
 
     float mean = 0.5 * trace;
