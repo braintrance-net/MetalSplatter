@@ -180,7 +180,11 @@ FragmentIn splatVertex(Splat splat,
     bool playCanvasKernel = (uniforms.renderingFlags & 2u) != 0;
     // PlayCanvas uses twice our focal length and halves its projected axes.
     // Its +0.3 covariance filter is therefore +0.075 in our pixel coordinates.
-    float3 cov2D = calcCovariance2D(viewPosition3, splat.covA, splat.covB,
+    float3 projectionPosition = viewPosition3;
+    // Bound the projection denominator without dropping front-facing centers
+    // inside the near plane, matching the reference projector.
+    if (playCanvasKernel) { projectionPosition.z = min(projectionPosition.z, -0.001f); }
+    float3 cov2D = calcCovariance2D(projectionPosition, splat.covA, splat.covB,
                                     uniforms.viewMatrix,
                                     uniforms.focalX, uniforms.focalY,
                                     uniforms.tanHalfFovX, uniforms.tanHalfFovY,
@@ -204,6 +208,9 @@ FragmentIn splatVertex(Splat splat,
     }
 
     float4 projectedCenter = uniforms.projectionMatrix * viewPosition4;
+    // PlayCanvas clamps clip depth for front-facing centers. Clipping these
+    // centers outright can remove wide, visible Gaussians from indoor scenes.
+    if (playCanvasKernel) { projectedCenter.z = clamp(projectedCenter.z, 0.0f, projectedCenter.w); }
 
     // Cull the projected quad, not just its center. A large offscreen-center
     // Gaussian can still contribute visible fragments inside the viewport.
