@@ -102,13 +102,15 @@ vertex FragmentIn postprocessVertexShader(uint vertexID [[vertex_id]]) {
     return out;
 }
 
-fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]]) {
+fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
+                                       constant UniformsArray & uniformsArray [[buffer(BufferIndexUniforms)]]) {
     FragmentOut out;
     out.depth = (fragmentValues.color.a == 0) ? 0 : fragmentValues.depth / fragmentValues.color.a;
-    out.color = fragmentValues.color;
+    out.color = fragmentValues.color + half4(uniformsArray.uniforms[0].clearColor) * (1 - fragmentValues.color.a);
     return out;
 }
 
-fragment half4 postprocessFragmentShaderNoDepth(FragmentValues fragmentValues [[imageblock_data]]) {
-    return fragmentValues.color;
+fragment half4 postprocessFragmentShaderNoDepth(FragmentValues fragmentValues [[imageblock_data]],
+                                                 constant UniformsArray & uniformsArray [[buffer(BufferIndexUniforms)]]) {
+    return fragmentValues.color + half4(uniformsArray.uniforms[0].clearColor) * (1 - fragmentValues.color.a);
 }

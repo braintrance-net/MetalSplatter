@@ -184,13 +184,16 @@ FragmentIn splatVertex(Splat splat,
 
     float4 projectedCenter = uniforms.projectionMatrix * viewPosition4;
 
-    float bounds = 1.2 * projectedCenter.w;
+    // Cull the projected quad, not just its center. A large offscreen-center
+    // Gaussian can still contribute visible fragments inside the viewport.
+    float2 extent = (abs(axis1) + abs(axis2)) * (2.0f * float(kBoundsRadius))
+                    / float2(uniforms.screenSize) * projectedCenter.w;
     if (projectedCenter.z < 0.0 ||
         projectedCenter.z > projectedCenter.w ||
-        projectedCenter.x < -bounds ||
-        projectedCenter.x > bounds ||
-        projectedCenter.y < -bounds ||
-        projectedCenter.y > bounds) {
+        projectedCenter.x + extent.x < -projectedCenter.w ||
+        projectedCenter.x - extent.x > projectedCenter.w ||
+        projectedCenter.y + extent.y < -projectedCenter.w ||
+        projectedCenter.y - extent.y > projectedCenter.w) {
         out.position = float4(1, 1, 0, 1);
         return out;
     }
@@ -211,7 +214,7 @@ FragmentIn splatVertex(Splat splat,
     out.relativePosition = kBoundsRadius * relativeCoordinates;
 
     // Convert from sRGB to linear to match Metal expectations for shader color output
-    out.color = half4(sRGBToLinear(srgbColor), splat.color.a);
+    out.color = half4(uniforms.gammaEncodedOutput ? srgbColor : sRGBToLinear(srgbColor), splat.color.a);
     return out;
 }
 

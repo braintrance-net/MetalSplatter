@@ -95,6 +95,8 @@ class SplatSorter: @unchecked Sendable {
         let buffer: MetalBuffer<ChunkedSplatIndex>
         var referenceCount: Int = 0
         var isValid: Bool = false
+        var sortedCameraPose: CameraPose?
+        var sortedChunkGeneration: UInt64?
     }
 
     private struct State {
@@ -121,6 +123,7 @@ class SplatSorter: @unchecked Sendable {
 
     private let state: Mutex<State>
     private let device: MTLDevice
+    private let sortByDistance: Bool
 
     /// Called when a sort starts.
     /// Called from a background thread.
@@ -140,7 +143,8 @@ class SplatSorter: @unchecked Sendable {
 
     // MARK: - Initialization
 
-    init(device: MTLDevice) throws {
+    init(device: MTLDevice, sortByDistance: Bool = true) throws {
+        self.sortByDistance = sortByDistance
         self.device = device
 
         var indexBuffers: [IndexBuffer] = []
@@ -171,6 +175,7 @@ class SplatSorter: @unchecked Sendable {
     func setChunks(_ chunks: [ChunkReference]) {
         state.withLock { state in
             state.chunks = chunks
+            state.chunkGeneration &+= 1
             state.needsSort = !chunks.isEmpty
         }
         ensureSortLoopRunning()
@@ -247,6 +252,8 @@ class SplatSorter: @unchecked Sendable {
             }
         }
 
+        state.indexBuffers[freeIndex].sortedCameraPose = nil
+        state.indexBuffers[freeIndex].sortedChunkGeneration = nil
         state.indexBuffers[freeIndex].isValid = true
         state.mostRecentValidBufferIndex = freeIndex
     }
@@ -323,8 +330,11 @@ class SplatSorter: @unchecked Sendable {
     /// Updates the camera pose, triggering a new sort if needed.
     func updateCameraPose(position: SIMD3<Float>, forward: SIMD3<Float>) {
         state.withLock { state in
-            state.cameraPose = CameraPose(position: position, forward: forward)
-            state.needsSort = true
+            let pose = CameraPose(position: position, forward: forward)
+            if state.cameraPose != pose {
+                state.cameraPose = pose
+                state.needsSort = true
+            }
         }
         ensureSortLoopRunning()
     }
@@ -360,7 +370,7 @@ class SplatSorter: @unchecked Sendable {
     /// Attempts to obtain a reference to the current sorted index buffer without waiting.
     /// Returns nil immediately if no valid buffer is available.
     /// Caller must call `releaseSortedIndices` when done if a buffer is returned.
-    func tryObtainSortedIndices() -> MetalBuffer<ChunkedSplatIndex>? {
+    func tryObtainSortedIndices(requireCurrentSort: Bool = false) -> MetalBuffer<ChunkedSplatIndex>? {
         state.withLock { state -> MetalBuffer<ChunkedSplatIndex>? in
             // Don't provide buffers during exclusive access
             guard !state.hasExclusiveAccess else { return nil }
@@ -374,6 +384,15 @@ class SplatSorter: @unchecked Sendable {
             // Never hand out a buffer while a sort pass is writing into it.
             guard state.sortingBufferIndex != validIndex else {
                 return nil
+            }
+
+            // Patched buffers can contain sequential entries. Capture callers need a
+            // completed sort for this exact camera and chunk generation.
+            if requireCurrentSort {
+                guard state.indexBuffers[validIndex].sortedCameraPose == state.cameraPose,
+                      state.indexBuffers[validIndex].sortedChunkGeneration == state.chunkGeneration else {
+                    return nil
+                }
             }
 
             // Increment reference count and return
@@ -597,7 +616,7 @@ class SplatSorter: @unchecked Sendable {
 
         // Compute depth for each splat across all chunks
         var tempIndex = 0
-        if SplatRenderer.Constants.sortByDistance {
+        if sortByDistance {
             for chunk in chunks {
                 for i in 0..<chunk.buffer.count {
                     let position = chunk.buffer.values[i].position.simd
@@ -656,6 +675,8 @@ class SplatSorter: @unchecked Sendable {
                 return (true, [])
             }
 
+            state.indexBuffers[targetBufferIndex].sortedCameraPose = cameraPose
+            state.indexBuffers[targetBufferIndex].sortedChunkGeneration = chunkGeneration
             state.indexBuffers[targetBufferIndex].isValid = true
             state.mostRecentValidBufferIndex = targetBufferIndex
 

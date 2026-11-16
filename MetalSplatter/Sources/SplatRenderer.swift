@@ -9,10 +9,6 @@ public final class SplatRenderer: @unchecked Sendable {
     enum Constants {
         // Keep in sync with Shaders.metal : maxViewCount
         static let maxViewCount = 2
-        // Sort by euclidian distance squared from camera position (true), or along the "forward" vector (false)
-        // TODO: compare the behaviour and performance of sortByDistance
-        // notes: sortByDistance introduces unstable artifacts when you get close to an object; whereas !sortByDistance introduces artifacts are you turn -- but they're a little subtler maybe?
-        static let sortByDistance = true
         // Only store indices for 1024 splats; for the remainder, use instancing of these existing indices.
         // Setting to 1 uses only instancing (with a significant performance penalty); setting to a number higher than the splat count
         // uses only indexing (with a significant memory penalty for th elarge index array, and a small performance penalty
@@ -57,7 +53,7 @@ public final class SplatRenderer: @unchecked Sendable {
         var projectionMatrix: matrix_float4x4
         var viewMatrix: matrix_float4x4
         var cameraPosition: MTLPackedFloat3   // World-space camera position for SH evaluation
-        var _padding0: UInt32 = 0             // Padding for alignment
+        var gammaEncodedOutput: UInt32 = 0
         var screenSize: SIMD2<UInt32>         // Size of screen in pixels
 
         // Precomputed values for covariance projection (derived from projectionMatrix and screenSize)
@@ -70,6 +66,7 @@ public final class SplatRenderer: @unchecked Sendable {
 
         var splatCount: UInt32
         var indexedSplatCount: UInt32
+        var clearColor: SIMD4<Float>
     }
 
     // Keep in sync with Shaders.metal : UniformsArray
@@ -102,6 +99,14 @@ public final class SplatRenderer: @unchecked Sendable {
     }
 
     public let device: MTLDevice
+    /// Linear preserves the default physically linear blending. Gamma-encoded
+    /// matches PlayCanvas default splat compositing; use a non-sRGB UNORM target.
+    public enum CompositingColorSpace: Sendable {
+        case linear
+        case gammaEncoded
+    }
+    public enum SortingMode: Sendable { case distance, viewDepth }
+    public let compositingColorSpace: CompositingColorSpace
     public let colorFormat: MTLPixelFormat
     public let depthFormat: MTLPixelFormat
     public let sampleCount: Int
@@ -257,6 +262,8 @@ public final class SplatRenderer: @unchecked Sendable {
 
     public init(device: MTLDevice,
                 colorFormat: MTLPixelFormat,
+                compositingColorSpace: CompositingColorSpace = .linear,
+                sortingMode: SortingMode = .distance,
                 depthFormat: MTLPixelFormat,
                 sampleCount: Int,
                 maxViewCount: Int,
@@ -270,6 +277,7 @@ public final class SplatRenderer: @unchecked Sendable {
         self.device = device
 
         self.colorFormat = colorFormat
+        self.compositingColorSpace = compositingColorSpace
         self.depthFormat = depthFormat
         self.sampleCount = sampleCount
         self.maxViewCount = min(maxViewCount, Constants.maxViewCount)
@@ -288,7 +296,7 @@ public final class SplatRenderer: @unchecked Sendable {
         self.renderState = RenderState(uniforms: uniformsPointer,
                                         triangleVertexIndexBuffer: triangleVertexIndexBuffer)
 
-        self.sorter = try SplatSorter(device: device)
+        self.sorter = try SplatSorter(device: device, sortByDistance: sortingMode == .distance)
 
         self.accessState = Mutex(AccessState())
 
@@ -637,6 +645,7 @@ public final class SplatRenderer: @unchecked Sendable {
             let uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
                                     viewMatrix: viewport.viewMatrix,
                                     cameraPosition: MTLPackedFloat3Make(cameraPos.x, cameraPos.y, cameraPos.z),
+                                    gammaEncodedOutput: compositingColorSpace == .gammaEncoded ? 1 : 0,
                                     screenSize: SIMD2(x: UInt32(viewport.screenSize.x), y: UInt32(viewport.screenSize.y)),
                                     focalX: focalX,
                                     focalY: focalY,
@@ -644,7 +653,8 @@ public final class SplatRenderer: @unchecked Sendable {
                                     tanHalfFovY: tanHalfFovY,
                                     chunkCount: chunkCount,
                                     splatCount: splatCount,
-                                    indexedSplatCount: indexedSplatCount)
+                                    indexedSplatCount: indexedSplatCount,
+                                    clearColor: SIMD4(Float(clearColor.red), Float(clearColor.green), Float(clearColor.blue), Float(clearColor.alpha)))
             renderState.uniforms.pointee.setUniforms(index: i, uniforms)
         }
     }
@@ -760,6 +770,7 @@ public final class SplatRenderer: @unchecked Sendable {
     ///   - rasterizationRateMap: Optional rasterization rate map for variable rate shading
     ///   - renderTargetArrayLength: The render target array length (for layered rendering)
     ///   - accessTimeout: Maximum time to block waiting for render access (when exclusive chunk access is held, or when maxSimultaneousRenders are already in flight). Defaults to 0.1s.
+    ///   - requireCurrentSort: Reject sequential fallback and stale camera/chunk sorts. Use for deterministic captures.
     ///   - sortTimeout: Maximum time to block the caller in order to wait for a valid sorted index buffer to be available. This does not cause the method to wait for the latest sort to complete, it only causes it to block if no sort at all has completed since the last time the sort was invalidated (e.g. if chunks were changed). Passing 0 disables blocking, but may result in a flash after a chunk update instead of a dropped frame. Defaults to blocking 0.1s.
     ///   - commandBuffer: The command buffer to encode rendering commands into
     /// - Returns: `true` if rendering was performed, `false` if rendering was skipped (e.g., due to exclusive access timeout or no splats). When `false` is returned, the caller should drop the frame rather than presenting an incomplete render.
@@ -772,6 +783,7 @@ public final class SplatRenderer: @unchecked Sendable {
                        renderTargetArrayLength: Int,
                        accessTimeout: TimeInterval = 0.1,
                        sortTimeout: TimeInterval = 0.1,
+                       requireCurrentSort: Bool = false,
                        to commandBuffer: MTLCommandBuffer) throws -> Bool {
         // Try to acquire render access, respecting exclusive access, serial render, and maxSimultaneousRenders
         let deadline = Date().addingTimeInterval(accessTimeout)
@@ -824,12 +836,12 @@ public final class SplatRenderer: @unchecked Sendable {
         sorter.updateCameraPose(position: cameraPose.position, forward: cameraPose.forward)
 
         // Try to get sorted indices, optionally waiting up to sortTimeout
-        var splatIndexBuffer = sorter.tryObtainSortedIndices()
+        var splatIndexBuffer = sorter.tryObtainSortedIndices(requireCurrentSort: requireCurrentSort)
         if splatIndexBuffer == nil && sortTimeout > 0 {
             let deadline = Date().addingTimeInterval(sortTimeout)
             while splatIndexBuffer == nil && Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.01)
-                splatIndexBuffer = sorter.tryObtainSortedIndices()
+                splatIndexBuffer = sorter.tryObtainSortedIndices(requireCurrentSort: requireCurrentSort)
             }
         }
         guard let splatIndexBuffer else { return false }
@@ -951,6 +963,7 @@ public final class SplatRenderer: @unchecked Sendable {
             renderEncoder.setRenderPipelineState(postprocessPipelineState)
             renderEncoder.setDepthStencilState(renderState.postprocessDepthState)
             renderEncoder.setCullMode(.none)
+            renderEncoder.setFragmentBuffer(dynamicUniformBuffers, offset: renderState.uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
             renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             renderEncoder.popDebugGroup()
         } else {

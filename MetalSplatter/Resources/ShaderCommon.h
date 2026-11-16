@@ -47,7 +47,7 @@ typedef struct
     matrix_float4x4 projectionMatrix;
     matrix_float4x4 viewMatrix;
     packed_float3 cameraPosition;  // World-space camera position for SH evaluation
-    uint _padding0;                // Padding for alignment
+    uint gammaEncodedOutput;      // 0 = linear, 1 = gamma-encoded compositing
     uint2 screenSize;
 
     // Precomputed values for covariance projection (derived from projectionMatrix and screenSize)
@@ -65,6 +65,7 @@ typedef struct
      */
     uint splatCount;
     uint indexedSplatCount;
+    float4 clearColor;
 } Uniforms;
 
 typedef struct
