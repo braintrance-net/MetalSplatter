@@ -329,14 +329,14 @@ class SplatSorter: @unchecked Sendable {
 
     /// Updates the camera pose, triggering a new sort if needed.
     func updateCameraPose(position: SIMD3<Float>, forward: SIMD3<Float>) {
-        state.withLock { state in
+        let changed = state.withLock { state -> Bool in
             let pose = CameraPose(position: position, forward: forward)
-            if state.cameraPose != pose {
-                state.cameraPose = pose
-                state.needsSort = true
-            }
+            guard state.cameraPose != pose else { return false }
+            state.cameraPose = pose
+            state.needsSort = true
+            return true
         }
-        ensureSortLoopRunning()
+        if changed { ensureSortLoopRunning() }
     }
 
     // MARK: - Index Buffer Access (Scoped - Preferred)
@@ -423,8 +423,10 @@ class SplatSorter: @unchecked Sendable {
                 state.indexBuffers[i].isValid = false
             }
             state.mostRecentValidBufferIndex = nil
-            state.needsSort = true
+            state.chunkGeneration &+= 1
+            state.needsSort = !state.chunks.isEmpty
         }
+        ensureSortLoopRunning()
     }
 
     // MARK: - Sort Completion Handlers
@@ -530,12 +532,6 @@ class SplatSorter: @unchecked Sendable {
     }
 
     private func sortLoop() async {
-        defer {
-            state.withLock { state in
-                state.sortLoopRunning = false
-            }
-        }
-
         while !Task.isCancelled {
             // Check if we need to sort
             let sortParams = state.withLock { state -> (chunks: [ChunkReference], pose: CameraPose, bufferIndex: Int, chunkGeneration: UInt64)? in
@@ -574,7 +570,14 @@ class SplatSorter: @unchecked Sendable {
             guard let params = sortParams else {
                 // Nothing to sort or no buffer available, check if we should exit or wait
                 let shouldExit = state.withLock { state -> Bool in
-                    !state.needsSort && state.chunks.isEmpty
+                    if !state.needsSort || state.chunks.isEmpty {
+                        // Change the running flag under the same lock as the work
+                        // check. A later camera/chunk update can safely start a new
+                        // loop without losing its wakeup or being clobbered by defer.
+                        state.sortLoopRunning = false
+                        return true
+                    }
+                    return false
                 }
 
                 if shouldExit {
@@ -593,6 +596,7 @@ class SplatSorter: @unchecked Sendable {
                 chunkGeneration: params.chunkGeneration
             )
         }
+        state.withLock { $0.sortLoopRunning = false }
     }
 
     private func performSort(

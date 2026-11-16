@@ -30,6 +30,15 @@ final class CaptureSortTests: XCTestCase {
         XCTAssertEqual(sorted.values[0].splatIndex, 1)
         sorter.releaseSortedIndices(sorted)
 
+        // Repeating a static pose must not continuously consume CPU sorting.
+        let unnecessarySort = expectation(description: "unchanged camera must not sort")
+        unnecessarySort.isInverted = true
+        sorter.onSortStart = { unnecessarySort.fulfill() }
+        for _ in 0..<20 {
+            sorter.updateCameraPose(position: .zero, forward: SIMD3(0, 0, -1))
+        }
+        await fulfillment(of: [unnecessarySort], timeout: 0.05)
+
         // An old-camera result must be rejected even though it remains valid for live UI.
         let cameraStarted = expectation(description: "camera sort starts")
         let cameraFinished = expectation(description: "camera sort finishes")
